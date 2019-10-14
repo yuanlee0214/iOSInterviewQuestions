@@ -164,7 +164,12 @@ IMP lookUpImpOrNil(Class cls, SEL sel) {
 ```Objective-C
 (void)instrumentObjcMessageSends(YES);
 ```
-
+因为该函数处于 objc-internal.h 内，而该文件并不开放，所以调用的时候先声明，目的是告诉编译器程序目标文件包含该方法存在，让编译通过
+```
+OBJC_EXPORT void
+instrumentObjcMessageSends(BOOL flag)
+OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0, 2.0);
+```
 
 或者断点暂停程序运行，并在 gdb 中输入下面的命令：
 
@@ -264,7 +269,7 @@ int main(int argc, char * argv[]) {
 
  3. 调用`methodSignatureForSelector:`方法，尝试获得一个方法签名。如果获取不到，则直接调用`doesNotRecognizeSelector`抛出异常。如果能获取，则返回非nil：创建一个 NSlnvocation 并传给`forwardInvocation:`。
 
- 4. 调用`forwardInvocation:`方法，将第3步获取到的方法签名包装成 Invocation 传入，如何处理就在这里面了，并返回非ni。
+ 4. 调用`forwardInvocation:`方法，将第3步获取到的方法签名包装成 Invocation 传入，如何处理就在这里面了，并返回非nil。
 
  5. 调用`doesNotRecognizeSelector:` ，默认的实现是抛出异常。如果第3步没能获得一个方法签名，执行该步骤。
 
@@ -585,7 +590,8 @@ ARC相对于MRC，不是在编译时添加retain/release/autorelease这么简单
 
 释放的时机总结起来，可以用下图来表示：
 
-![autoreleasepool与 runloop 的关系图](http://i61.tinypic.com/28kodwp.jpg)
+
+<p align="center"><a href="https://mp.weixin.qq.com/s/A4e5h3xgIEh6PInf1Rjqsw"><img src="http://ww3.sinaimg.cn/large/006y8mN6gy1g71mm4cx74j30kr0gngnw.jpg"></a></p>
 
 下面对这张图进行详细的解释：
 
@@ -601,7 +607,7 @@ ARC相对于MRC，不是在编译时添加retain/release/autorelease这么简单
 
 那什么时间会创建自动释放池？运行循环检测到事件并启动后，就会创建自动释放池。 
 
-子线程的 runloop 默认是不工作，无法主动创建，必须手动创建。
+从 `RunLoop` 源代码中可知，子线程默认是没有 `RunLoop` 的，如果需要在子线程开启 `RunLoop` ，则需要调用 `[NSRunLoop CurrentRunLoop]` 方法，它内部实现是先检查线程，如果发现是子线程，以懒加载的形式 创建一个子线程的 `RunLoop`。并存储在一个全局的 可变字典里。编程人员在调用 `[NSRunLoop CurrentRunLoop]` 时，是自动创建 `RunLoop` 的，而没法手动创建。
 
 自定义的 NSOperation 和 NSThread 需要手动创建自动释放池。比如： 自定义的 NSOperation 类中的 main 方法里就必须添加自动释放池。否则出了作用域后，自动释放对象会因为没有自动释放池去处理它，而造成内存泄露。
 
@@ -636,7 +642,10 @@ autoreleasepool 以一个队列数组的形式实现,主要通过下列三个函
 
 举例说明：我们都知道用类方法创建的对象都是 Autorelease 的，那么一旦 Person 出了作用域，当在 Person 的 dealloc 方法中打上断点，我们就可以看到这样的调用堆栈信息：
 
- ![enter image description here](http://i60.tinypic.com/15mfj11.jpg)
+ 
+ <p align="center"><a href="https://mp.weixin.qq.com/s/A4e5h3xgIEh6PInf1Rjqsw"><img src="http://ww1.sinaimg.cn/large/006y8mN6gy1g71molq31cj30ad0iojse.jpg"></a></p>
+
+
 
 ### 37. 使用block时什么情况会发生引用循环，如何解决？
 一个对象中强引用了block，在block中又强引用了该对象，就会发射循环引用。
@@ -723,7 +732,7 @@ autoreleasepool 以一个队列数组的形式实现,主要通过下列三个函
         a.string = @"Jerry";
         NSLog(@"\n block内部：------------------------------------\n\
          a指向的堆中地址：%p；a在栈中的指针地址：%p", a, &a);               //a在栈区
-        a = [NSMutableString stringWithString:@"William"];
+        //a = [NSMutableString stringWithString:@"William"];
     };
     foo();
     NSLog(@"\n 定以后：------------------------------------\n\
@@ -731,7 +740,7 @@ autoreleasepool 以一个队列数组的形式实现,主要通过下列三个函
     
  ```
 
-![enter image description here](http://i66.tinypic.com/34euhcy.jpg)
+<p align="center"><a href="https://mp.weixin.qq.com/s/A4e5h3xgIEh6PInf1Rjqsw"><img src="http://ww2.sinaimg.cn/large/006y8mN6gy1g71mr9ygfsj30qh0buju1.jpg"></a></p>
 
 
  这里的a已经由基本数据类型，变成了对象类型。block会对对象类型的指针进行copy，copy到堆中，但并不会改变该指针所指向的堆中的地址，所以在上面的示例代码中，block体内修改的实际是a指向的堆中的内容。
@@ -828,8 +837,9 @@ dispatch_group_notify(group, dispatch_get_main_queue(), ^{
 
 ### 43. 苹果为什么要废弃`dispatch_get_current_queue`？
 
-`dispatch_get_current_queue`容易造成死锁
-
+`dispatch_get_current_queue`函数的行为常常与开发者所预期的不同。
+由于派发队列是按层级来组织的，这意味着排在某条队列中的块会在其上级队列里执行。
+队列间的层级关系会导致检查当前队列是否为执行同步派发所用的队列这种方法并不总是奏效。`dispatch_get_current_queue`函数通常会被用于解决由不可以重入的代码所引发的死锁，然后能用此函数解决的问题，通常也可以用"队列特定数据"来解决。
 
 ### 44. 以下代码运行结果如何？
 
@@ -964,7 +974,9 @@ KVC 支持实例变量，KVO 只能手动支持[手动设定实例变量的KVO�
 
  > 当你观察一个对象时，一个新的类会被动态创建。这个类继承自该对象的原本的类，并重写了被观察属性的 setter 方法。重写的 setter 方法会负责在调用原 setter 方法之前和之后，通知所有观察对象：值的更改。最后通过 ` isa 混写（isa-swizzling）` 把这个对象的 isa 指针 ( isa 指针告诉 Runtime 系统这个对象的类是什么 ) 指向这个新创建的子类，对象就神奇的变成了新创建的子类的实例。我画了一张示意图，如下所示：
 
-![enter image description here](http://i62.tinypic.com/sy57ur.jpg)
+
+<p align="center"><a href="https://mp.weixin.qq.com/s/A4e5h3xgIEh6PInf1Rjqsw"><img src="http://ww1.sinaimg.cn/large/006y8mN6gy1g71mu8gh57j30jg0bnq41.jpg"></a></p>
+
 
  KVO 确实有点黑魔法：
 
@@ -1032,7 +1044,6 @@ KVO 在实现中通过 ` isa 混写（isa-swizzling）` 把这个对象的 isa �
 
  ```
 
-![enter image description here](http://i66.tinypic.com/ncm7th.jpg)
 
 
 如果单单从下面这个例子的打印上， 
@@ -1075,7 +1086,9 @@ KVO 在实现中通过 ` isa 混写（isa-swizzling）` 把这个对象的 isa �
  3. 设置全局断点快速定位问题代码所在行
  4. Xcode 7 已经集成了BAD_ACCESS捕获功能：**Address Sanitizer**。
 用法如下：在配置中勾选✅Enable Address Sanitizer
- ![enter image description here](https://developer.apple.com/library/prerelease/ios/documentation/DeveloperTools/Conceptual/WhatsNewXcode/Art/xc7-asan_2x.png)
+
+<p align="center"><a href="https://mp.weixin.qq.com/s/A4e5h3xgIEh6PInf1Rjqsw"><img src="http://ww4.sinaimg.cn/large/006y8mN6gy1g71n53zsvpj30qc09sdh7.jpg"></a></p>
+
 
 ### 55. lldb（gdb）常用的调试命令？
 
@@ -1090,10 +1103,8 @@ KVO 在实现中通过 ` isa 混写（isa-swizzling）` 把这个对象的 isa �
  2. 苹果官方文档：[ ***iOS Debugging Magic*** ](https://developer.apple.com/library/ios/technotes/tn2239/_index.html)。
 
 
-----------
-
-
-Posted by [微博@iOS程序犭袁](http://weibo.com/luohanchenyilong/)  
+<hr />
+Posted by Posted by [微博@iOS程序犭袁](http://weibo.com/luohanchenyilong/) & [公众号@iTeaTime技术清谈](https://mp.weixin.qq.com/s/A4e5h3xgIEh6PInf1Rjqsw) 
 原创文章，版权声明：自由转载-非商用-非衍生-保持署名 | [Creative Commons BY-NC-ND 3.0](http://creativecommons.org/licenses/by-nc-nd/3.0/deed.zh)
-
+<p align="center"><a href="http://weibo.com/u/1692391497?s=6uyXnP" target="_blank"><img border="0" src="http://service.t.sina.com.cn/widget/qmd/1692391497/b46c844b/1.png"/></a></p>
 
